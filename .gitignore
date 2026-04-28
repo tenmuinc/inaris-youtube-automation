@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+
+# Local-only secrets - NEVER commit
+.streamlit/secrets.toml
+client_secrets.json
+config.json
+token.pickle
+
+# Local outputs
+output/
