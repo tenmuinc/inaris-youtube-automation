@@ -78,7 +78,7 @@ def build_native_vibe_srt(segments: list[Segment], items: list[dict]) -> str:
         anchor = by_index.get(item["anchor_index"])
         if anchor is None:
             continue
-        text = f"{item['japanese']}\n{item['english']}\n{item['tip']}"
+        text = f"Native Vibe\n{item['japanese']}\n{item['english']}\n{item['tip']}"
         out_subs.append(
             srt.Subtitle(index=i, start=anchor.start, end=anchor.end, content=text)
         )
