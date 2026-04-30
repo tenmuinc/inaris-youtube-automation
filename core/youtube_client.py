@@ -27,8 +27,15 @@ def build_flow(client_config: dict, redirect_uri: str) -> Flow:
     client_config: Google Cloud Consoleで発行したOAuthクライアント(ウェブアプリ)のJSON。
                    通常は `{"web": {...}}` の形式。
     redirect_uri:  Google Cloud側に登録済みのリダイレクトURI。
+
+    PKCEは無効化している (autogenerate_code_verifier=False)。
+    Web application型 + client_secret 保持の confidential client なので、
+    PKCEは必須ではない。Streamlitの再実行で session_state が失われる
+    ケースに備えるための単純化。
     """
-    flow = Flow.from_client_config(client_config, scopes=SCOPES)
+    flow = Flow.from_client_config(
+        client_config, scopes=SCOPES, autogenerate_code_verifier=False
+    )
     flow.redirect_uri = redirect_uri
     return flow
 
