@@ -120,8 +120,12 @@ if "code" in query and "yt_credentials" not in st.session_state:
             _client_config_for_flow(config["google_oauth"], config["redirect_uri"]),
             config["redirect_uri"],
         )
+        # PKCE: 認可URL生成時に保存した code_verifier を復元
+        if "oauth_code_verifier" in st.session_state:
+            flow.code_verifier = st.session_state["oauth_code_verifier"]
         flow.fetch_token(code=query["code"])
         st.session_state["yt_credentials"] = credentials_to_dict(flow.credentials)
+        st.session_state.pop("oauth_code_verifier", None)
         st.query_params.clear()
         st.success("✅ Google認証に成功しました")
         st.rerun()
@@ -316,6 +320,9 @@ with tab2:
         auth_url, _ = flow.authorization_url(
             access_type="offline", prompt="consent", include_granted_scopes="true"
         )
+        # PKCE: コールバック時に必要な code_verifier をセッションに保持
+        if getattr(flow, "code_verifier", None):
+            st.session_state["oauth_code_verifier"] = flow.code_verifier
         st.warning("Googleアカウントでこのアプリに権限を渡す必要があります。")
         st.link_button("🔐 Googleで認証する", auth_url, use_container_width=True)
         st.stop()
