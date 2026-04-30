@@ -157,6 +157,31 @@ with tab1:
 
         st.success(f"✅ 生成完了！ {seg_count} セグメントから以下を生成：")
 
+        # === 英語のタイトル&概要欄を最初に表示（YouTube Studioへのコピペ用） ===
+        if "titles" in results:
+            try:
+                titles_data = json.loads(results["titles"][1].decode("utf-8"))
+                en = titles_data.get("en", {})
+                if en.get("title") and en.get("description"):
+                    st.markdown("---")
+                    st.markdown("### 🇬🇧 YouTube Studio に貼るベース（英語）")
+                    st.caption("動画アップロード時のタイトル・概要欄として使う。他20言語はSTEP 2で自動設定。")
+
+                    st.markdown("**タイトル**")
+                    st.code(en["title"], language=None)
+
+                    st.markdown("**概要欄**")
+                    st.text_area(
+                        "概要欄(コピー用)",
+                        value=en["description"],
+                        height=300,
+                        key="en_desc_display",
+                        label_visibility="collapsed",
+                    )
+                    st.markdown("---")
+            except Exception:
+                pass
+
         for kind, (filename, content_bytes, count) in results.items():
             label = {
                 "native_vibe": f"🎙 Native Vibe : {count}件",
@@ -402,8 +427,12 @@ with tab2:
 
             video_id = video_id_input.strip()
             titles = json.loads(uploaded_titles.getvalue().decode("utf-8"))
-            ja_title = titles["ja"]["title"]
-            ja_description = titles["ja"]["description"]
+            # ベース言語は英語。日本語は1ローカライズとして扱う。
+            if "en" not in titles:
+                st.error("❌ titles JSON に英語(en)が含まれていません")
+                st.stop()
+            base_title = titles["en"]["title"]
+            base_description = titles["en"]["description"]
 
             tmpdir = Path(tempfile.mkdtemp(prefix="inaris_"))
 
@@ -445,9 +474,9 @@ with tab2:
                     }
                     yt.set_localizations(
                         video_id=video_id,
-                        default_language="ja",
-                        default_title=ja_title,
-                        default_description=ja_description,
+                        default_language="en",
+                        default_title=base_title,
+                        default_description=base_description,
                         localizations=localizations,
                     )
                 st.success("✅ 21言語のタイトル＆概要欄設定完了")
