@@ -12,7 +12,12 @@ import json
 
 import anthropic
 
-from .srt_utils import Segment, segments_to_indexed_lines
+from .srt_utils import (
+    Segment,
+    segments_to_indexed_lines,
+    segments_to_indexed_lines_with_time,
+    video_duration_mmss,
+)
 
 
 class ClaudeClient:
@@ -67,6 +72,9 @@ class ClaudeClient:
         return result.get("items", [])
 
     def generate_multilingual_titles(self, segments: list[Segment]) -> dict:
-        return self._generate_json(
-            self.prompts["multilingual_titles"], segments_to_indexed_lines(segments)
+        # タイトル・概要欄はチャプター生成のためタイムスタンプも渡す
+        body = (
+            f"# 動画全体の長さ: {video_duration_mmss(segments)}\n\n"
+            + segments_to_indexed_lines_with_time(segments)
         )
+        return self._generate_json(self.prompts["multilingual_titles"], body)

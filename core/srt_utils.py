@@ -67,6 +67,31 @@ def segments_to_indexed_lines(segments: list[Segment]) -> str:
     return "\n".join(f"[{s.index}] {s.text}" for s in segments)
 
 
+def _format_mmss(td: timedelta) -> str:
+    total = int(td.total_seconds())
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+def segments_to_indexed_lines_with_time(segments: list[Segment]) -> str:
+    """AIに渡す形式: '[1] (0:00) テキスト' の行リスト。
+    タイトル・概要欄・チャプター生成時に使う（時間情報が必要なため）。
+    """
+    return "\n".join(
+        f"[{s.index}] ({_format_mmss(s.start)}) {s.text}" for s in segments
+    )
+
+
+def video_duration_mmss(segments: list[Segment]) -> str:
+    """動画全体の長さを mm:ss / h:mm:ss 形式で返す。"""
+    if not segments:
+        return "0:00"
+    return _format_mmss(segments[-1].end)
+
+
 def build_native_vibe_srt(segments: list[Segment], items: list[dict]) -> str:
     """Native VibeのJSON結果から、原本SRTのタイムスタンプを引いてSRTを構築する。
 
