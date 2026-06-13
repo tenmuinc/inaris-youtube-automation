@@ -6,20 +6,24 @@ Streamlit Community Cloudにデプロイ可能なWeb UI。
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import tempfile
+import zipfile
 from datetime import datetime, time, timezone, timedelta
 from pathlib import Path
 
 import streamlit as st
 
 from core.claude_client import ClaudeClient
+from core.notion_client import NotionClient
 from core.srt_utils import (
     RubyContaminationError,
     build_jlpt_srt,
     build_native_vibe_srt,
     detect_ruby,
+    filter_jlpt_items,
     parse_srt,
 )
 from core.youtube_client import (
@@ -45,6 +49,9 @@ def load_secrets():
             "jlpt": st.secrets["prompts"]["jlpt"],
             "multilingual_titles": st.secrets["prompts"]["multilingual_titles"],
         }
+        # Notion連携は任意。未設定なら黙って無効化
+        notion_token = st.secrets.get("notion_token", "")
+        notion_database_id = st.secrets.get("notion_database_id", "")
     except (KeyError, FileNotFoundError) as e:
         st.error(
             "❌ Secretsが設定されていません。\n\n"
@@ -65,7 +72,18 @@ def load_secrets():
         "google_oauth": google_oauth,
         "redirect_uri": redirect_uri,
         "prompts": prompts,
+        "notion_token": notion_token,
+        "notion_database_id": notion_database_id,
     }
+
+
+def get_notion() -> NotionClient | None:
+    cfg = st.session_state.get("_config_cache")
+    if cfg is None:
+        return None
+    if not cfg.get("notion_token") or not cfg.get("notion_database_id"):
+        return None
+    return NotionClient(cfg["notion_token"], cfg["notion_database_id"])
 
 
 def safe_m_number(s: str) -> str:
@@ -91,6 +109,7 @@ st.markdown("# 🎬 inaris_youtube_automation")
 st.caption("INARIS の YouTube 動画制作の繰り返し作業を一括自動化します。")
 
 config = load_secrets()
+st.session_state["_config_cache"] = config
 
 
 # ============================================================================
@@ -182,17 +201,45 @@ with tab1:
             except Exception:
                 pass
 
-        for kind, (filename, content_bytes, count) in results.items():
-            label = {
-                "native_vibe": f"🎙 Native Vibe : {count}件",
-                "jlpt": f"📖 JLPT単語 : {count}件",
-                "titles": f"🌐 多言語タイトル＆概要欄 : {count}言語",
-            }[kind]
-            with st.container(border=True):
-                st.markdown(f"**{label}**")
-                st.caption(filename)
+        # === 生成サマリ ===
+        labels = {
+            "native_vibe": f"🎙 Native Vibe : {results.get('native_vibe', (None, None, 0))[2]}件",
+            "jlpt": f"📖 JLPT単語 : {results.get('jlpt', (None, None, 0))[2]}件",
+            "titles": f"🌐 多言語タイトル＆概要欄 : {results.get('titles', (None, None, 0))[2]}言語",
+        }
+        for kind in results:
+            st.markdown(f"- {labels[kind]}  `{results[kind][0]}`")
+
+        # JLPTドロップ件数表示
+        dropped = st.session_state.get("step1_jlpt_dropped", 0)
+        if dropped:
+            st.info(f"ℹ️ JLPT: 発話に存在しない単語 {dropped} 件を自動除外しました")
+
+        # Notion更新結果
+        notion_msg = st.session_state.get("step1_notion_msg")
+        if notion_msg:
+            st.info(f"📝 Notion: {notion_msg}")
+
+        # === ZIP一括ダウンロード ===
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for filename, content_bytes, _ in results.values():
+                zf.writestr(filename, content_bytes)
+        st.download_button(
+            label=f"📦 全ファイルをZIPでダウンロード（{len(results)}個）",
+            data=zip_buffer.getvalue(),
+            file_name=f"inaris_{m_num}.zip",
+            mime="application/zip",
+            key="dl_all_zip",
+            type="primary",
+            use_container_width=True,
+        )
+
+        # 個別ダウンロードも残す（折りたたみ）
+        with st.expander("個別にダウンロードする"):
+            for kind, (filename, content_bytes, count) in results.items():
                 st.download_button(
-                    label=f"⬇️ {filename} をダウンロード",
+                    label=f"⬇️ {filename}",
                     data=content_bytes,
                     file_name=filename,
                     mime="text/plain" if filename.endswith(".srt") else "application/json",
@@ -278,12 +325,14 @@ with tab1:
                 if gen_jlpt:
                     progress.progress(step_done / steps_total, text="JLPT単語生成中...")
                     jlpt_items = client.generate_jlpt(segments)
-                    jlpt_srt = build_jlpt_srt(segments, jlpt_items)
+                    kept, dropped = filter_jlpt_items(segments, jlpt_items)
+                    jlpt_srt = build_jlpt_srt(segments, kept)
                     results["jlpt"] = (
                         f"jlpt_vocab_{m_number}.srt",
                         jlpt_srt.encode("utf-8"),
-                        len(jlpt_items),
+                        len(kept),
                     )
+                    st.session_state["step1_jlpt_dropped"] = len(dropped)
                     step_done += 1
 
                 if gen_titles:
@@ -299,6 +348,28 @@ with tab1:
                     step_done += 1
 
                 progress.progress(1.0, text="完了")
+
+                # ===== Notion 更新（任意・失敗してもStep1自体は止めない） =====
+                notion = get_notion()
+                if notion:
+                    en_title = en_desc = None
+                    if "titles" in results:
+                        try:
+                            titles_data = json.loads(results["titles"][1].decode("utf-8"))
+                            en_title = titles_data.get("en", {}).get("title")
+                            en_desc = titles_data.get("en", {}).get("description")
+                        except Exception:
+                            pass
+                    ok, msg = notion.update_video_metadata(
+                        m_number,
+                        title=en_title,
+                        description=en_desc,
+                        srt=True if "jlpt" in results or "native_vibe" in results else None,
+                        tips=True if "native_vibe" in results else None,
+                    )
+                    st.session_state["step1_notion_msg"] = msg
+                else:
+                    st.session_state["step1_notion_msg"] = None
 
                 st.session_state["step1_results"] = results
                 st.session_state["step1_m_number"] = m_number
@@ -480,6 +551,21 @@ with tab2:
                         localizations=localizations,
                     )
                 st.success("✅ 21言語のタイトル＆概要欄設定完了")
+
+            # ===== Notion: schedule列を更新 =====
+            notion = get_notion()
+            if notion:
+                schedule_text = (
+                    f"{publish_date.strftime('%Y-%m-%d')} {publish_time.strftime('%H:%M')} JST"
+                )
+                ok, msg = notion.update_video_metadata(
+                    m_number2,
+                    schedule=schedule_text,
+                )
+                if ok:
+                    st.info(f"📝 Notion: {msg}")
+                else:
+                    st.warning(f"📝 Notion更新スキップ: {msg}")
 
             st.success(
                 f"🎉 すべて完了しました！\n\n"

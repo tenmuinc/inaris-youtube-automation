@@ -110,11 +110,62 @@ def build_native_vibe_srt(segments: list[Segment], items: list[dict]) -> str:
     return srt.compose(out_subs)
 
 
+def _word_appears_in_text(word: str, reading: str, text: str) -> bool:
+    """JLPT項目の単語が、anchor textに literal に含まれているかチェック。
+
+    - 完全一致でword自体が含まれていればOK
+    - 動詞・形容詞は辞書形になっているので、語幹/漢字部分でもチェック
+    - readingがそのまま含まれていてもOK（ひらがな表記の場合）
+    """
+    if not word or not text:
+        return False
+    if word in text:
+        return True
+    if reading and reading in text:
+        return True
+    # 活用語: 末尾1文字を削った語幹で再チェック
+    if len(word) >= 2:
+        stem = word[:-1]
+        if len(stem) >= 1 and stem in text:
+            return True
+        # 漢字部分だけ抜き出してチェック
+        kanji_only = "".join(ch for ch in word if "一" <= ch <= "鿿")
+        if len(kanji_only) >= 1 and kanji_only in text:
+            return True
+    return False
+
+
+def filter_jlpt_items(
+    segments: list[Segment], items: list[dict]
+) -> tuple[list[dict], list[dict]]:
+    """発話テキストに存在しない単語を除外する。
+
+    Returns: (kept_items, dropped_items)
+    """
+    by_index = {s.index: s for s in segments}
+    kept, dropped = [], []
+    for item in items:
+        anchor = by_index.get(item.get("anchor_index"))
+        if anchor is None:
+            dropped.append(item)
+            continue
+        word = item.get("word", "")
+        reading = item.get("reading", "")
+        if _word_appears_in_text(word, reading, anchor.text):
+            kept.append(item)
+        else:
+            dropped.append(item)
+    return kept, dropped
+
+
 def build_jlpt_srt(segments: list[Segment], items: list[dict]) -> str:
     """JLPTのJSON結果から、原本SRTのタイムスタンプを引いてSRTを構築する。
 
     items: [{"anchor_index": int, "word": str, "reading": str, "meaning": str, "level": str}, ...]
+
+    発話テキストに存在しない単語(ハルシネーション)は自動で除外する。
     """
+    items, _ = filter_jlpt_items(segments, items)
     by_index = {s.index: s for s in segments}
     out_subs = []
     for i, item in enumerate(items, start=1):
